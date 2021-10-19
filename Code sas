@@ -1,0 +1,598 @@
+/*Create a library*/
+libname mabib 'C:\Users\Perfect PC\Desktop\Projet Assurance non-vie';
+
+/*** Production ***/
+/* 1. Importing the dataset : production*/
+proc import 
+	datafile='C:\Users\Perfect PC\Desktop\Projet Assurance non-vie\production.csv' 
+	out=mabib.production replace;
+	getnames=yes;
+run;
+
+/* 2. Renaming variables*/
+data mabib.production;
+	rename DNA=Date_de_naissance
+		DMC=Date_de_Mise_en_Circulation
+		DOP=Date_obtention_du_permis
+		DPEF=Date_du_premier_effet;
+	set mabib.production;
+run;
+
+/* 3. Count the number of NAs per variable and their proportion w.r.t the total nb
+of obs*/
+proc means data=mabib.production nmiss stackodsoutput;
+	ods output summary=missings;
+run;
+
+*Get the number of rows of the dataset and the total nb of obs will be : 12 * number of rows;
+proc sql noprint;
+	select count(*)
+		into : OBSCOUNT
+			from mabib.production;
+quit;
+
+data mabib.missings;
+	set missings;
+	percent = 100 * (NMiss / (&OBSCOUNT *12));
+run;
+
+proc print data=mabib.missings;
+	/* 4. Data cleaning*/
+data mabib.NewProd;
+	set mabib.production;
+
+	if Date_de_Mise_en_Circulation =. or Date_de_Mise_en_Circulation <= 0 then
+		delete;
+
+	if Date_de_naissance=. or Date_de_naissance <= 0 then
+		delete;
+
+	if Date_obtention_du_permis =. or Date_obtention_du_permis <= 0 then
+		delete;
+
+	if Date_du_premier_effet=. or Date_du_premier_effet <=0 then
+		delete;
+
+	if crm =. then
+		delete;
+
+	if exposition <= 0 or exposition > 1 then
+		delete;
+
+	if puissance_fiscale <=0 or puissance_fiscale > 100 then
+		delete;
+run;
+
+* New nb of obs per column = 125135. Nb of NAs = 0;
+proc means data=mabib.NEWPROD n nmiss;
+	/* 5. Convert dates from numeric to char */
+data mabib.NewProd;
+	set mabib.NewProd;
+	CDate_de_naissance=put(input(put(Date_de_naissance,f8.0), yymmdd8.), yymmdd10.);
+	CDate_de_Mise_en_Circulation=put(input(put(Date_de_Mise_en_Circulation,f8.0), yymmdd8.), yymmdd10.);
+	CDate_obtention_du_permis=put(input(put(Date_obtention_du_permis,f8.0), yymmdd8.), yymmdd10.);
+	CDate_du_premier_effet=put(input(put(Date_du_premier_effet,f8.0), yymmdd8.), yymmdd10.);
+run;
+
+/* 6. Convert form char to datetime*/
+data _null;
+	set mabib.Newprod;
+	array t(*)  CDate_de_naissance CDate_de_Mise_en_Circulation CDate_obtention_du_permis CDate_du_premier_effet;
+
+	do _n_=1 to dim(t);
+		year = substr(trim(left(t(_n_))),1,4);
+		month = substr(trim(left(t(_n_))),6,2);
+		day = substr(trim(left(t(_n_))),9,2);
+		t(_n_) = mdy(month, day, year);
+		drop year month day;
+	end;
+run;
+
+data mabib.NEWPROD;
+	set _null;
+	DDate_de_naissance  = input(CDate_de_naissance, best12.);
+	DDate_de_Mise_en_Circulation = input(CDate_de_Mise_en_Circulation, best12.);
+	DDate_obtention_du_permis = input(CDate_obtention_du_permis, best12.);
+	DDate_du_premier_effet  = input(CDate_du_premier_effet, best12.);
+	format DDate_de_naissance DDate_de_Mise_en_Circulation DDate_obtention_du_permis DDate_du_premier_effet  date10.;
+run;
+
+/* 7. Creating new variables*/
+data mabib.newprod;
+	set mabib.newprod;
+	ex = mdy(01,01,exercice);
+	format ex date10.;
+	age_du_conducteur = intck("year",DDate_de_naissance, ex);
+	age_du_vehicule = intck("year",DDate_de_Mise_en_Circulation, ex);
+	anciennete_du_permis  = intck("year",DDate_obtention_du_permis, ex);
+	anciennete_de_la_police = intck("year",DDate_du_premier_effet, ex);
+	drop ex;
+run;
+
+/* 8. Drop Duplicates*/
+*First let's count the number of occurence of every duplicate;
+** Create a macro variable containing all variables names;
+proc sql;
+	select name into: name separate ',' from dictionary.columns where libname='MABIB' and memname='NEWPROD';
+quit;
+
+** Count;
+proc sql;
+	title 'Duplicate Rows in Duplicates Table';
+	select *, count(*) as Count
+		from mabib.newprod
+			group by &name
+				having count(*) > 1;
+
+	** C/C : No dups in the dateset;
+	** ---> To drop dups we can use;
+proc sort data=Mabib.newprod noduprecs;
+	by _all_;
+Run;
+
+/* 9. Data cleaning*/
+data mabib.newprod;
+	set mabib.newprod;
+
+	if age_du_vehicule <=0 or age_du_vehicule >=100 or age_du_vehicule=. then
+		delete;
+
+	if age_du_conducteur < 18 or age_du_conducteur >=100 or age_du_conducteur=. then
+		delete;
+
+	if anciennete_du_permis <=0 or anciennete_du_permis >=80 or anciennete_du_permis=. then
+		delete;
+
+	if anciennete_de_la_police <=0 or anciennete_de_la_police=. then
+		delete;
+run;
+
+*We're left with 73886 obs;
+/***** Sinistres *****/
+/* 1. Import*/
+proc import 
+	datafile='C:\Users\Perfect PC\Desktop\Projet Assurance non-vie\sinistre.csv' 
+	out=mabib.sinistres replace;
+	getnames=yes;
+run;
+
+/* 2. Data cleaning*/
+* Previously done, no NAs in the dataset. Making sure ...;
+proc means data=mabib.Newprod nmiss;
+run;
+
+/* 3. Deleting negative Losses*/
+data mabib.NewSin;
+	set mabib.sinistres;
+
+	if charge < 0 then
+		delete;
+run;
+
+* We're left with 53997 obs from 65372 obs;
+/** PART 3 : Model building*/
+/*. First let's compute the number of claims and merge the two datasets (newprod & newsin) */
+proc freq data=mabib.NewSin;
+	tables police / out=Freqs(keep=police count);
+run;
+
+proc sql;
+	create table mabib.newSin as 
+		select * 
+			from mabib.newsin left join Freqs 
+				on newsin.police=Freqs.police;
+	update mabib.newsin
+		set count=0 where count=.;
+quit;
+
+data mabib.Prod;
+	rename Numero_police = police;
+	set mabib.newprod;
+	keep  police exposition sexe age_du_conducteur age_du_vehicule anciennete_de_la_police anciennete_du_permis Combustion 
+		crm puissance_fiscale;
+run;
+
+proc sql;
+	create table mabib.MERGED as 
+		select * 
+			from mabib.newsin left join mabib.Prod
+				on newsin.police=Prod.police;
+quit;
+
+** Drop NAs;
+data mabib.Merged;
+	set mabib.MERGED;
+
+	if cmiss(of _all_) then
+		delete;
+run;
+
+** Left with 12439**;
+/* Data exploration*/
+%macro relations(tab,var1,var2);
+
+	proc freq data=&tab;
+		tables &var1*&var2 /norow nocol nopercent chisq;
+	run;
+
+%mend
+
+	%relations(mabib.MERGED, combustion, sexe);
+
+* p-val < 0.05 ==> Dépendance exists;
+* Barplot of nb of claims;
+ods graphics on;
+title 'Number of Claims';
+
+proc sgplot data=mabib.Merged;
+	vbar count/  datalabel fillattrs=(color='DARKRED');
+run;
+
+* Age du conducteur;
+proc freq data=mabib.Merged noprint;
+	tables age_du_conducteur / out=freqOut;
+run;
+
+title 'Distribution of Age du conducteur';
+
+proc sgplot data=freqOut;
+	vbarparm category=age_du_conducteur response=percent / fillattrs=(color="darkred");
+	xaxis grid display=none;
+	yaxis grid;
+run;
+
+*Symmetric;
+proc univariate data=mabib.Merged;
+	var age_du_conducteur age_du_vehicule;
+
+	/* Create a new format for variable age (discrete ==> categorical)*/
+proc format;
+	value ageF   
+		19-25="[19,25]"
+		26-32 ="[26,32]"
+		33-39="[33-39]"
+		40-46 ="[40-46]"
+		47-53 ="[47-53]"
+		54-60 ="[54-60]"
+		61-67 = "[61-67]"
+		68-74 = "[68-74]"
+		75-81="[75-81]"
+		82-96= "[82-96]";
+run;
+
+/* Create a cat age va*/
+data mabib.MERGED;
+	set mabib.merged;
+
+	if age_du_conducteur >= 19 and age_du_conducteur <= 25 then
+		agef = "[19,25]";
+
+	if age_du_conducteur >= 26 and age_du_conducteur <= 32 then
+		agef = "[26,32]";
+
+	if age_du_conducteur >= 33 and age_du_conducteur <= 39 then
+		agef = "[33,39]";
+
+	if age_du_conducteur >= 40 and age_du_conducteur <= 46 then
+		agef = "[40,46]";
+
+	if age_du_conducteur >= 47 and age_du_conducteur <= 53 then
+		agef = "[47,53]";
+
+	if age_du_conducteur >= 54 and age_du_conducteur <= 60 then
+		agef = "[54,60]";
+
+	if age_du_conducteur >= 61 then
+		agef="[61,96]";
+run;
+
+proc freq data=mabib.Merged;
+	tables age_du_conducteur / nocol norow nofreq nocum out=ouss;
+	format age_du_conducteur ageF.;
+
+proc sgplot data=ouss;
+	vbarparm category=age_du_conducteur response=count / fillattrs=(color="darkred");
+	xaxis grid;
+	yaxis grid;
+run;
+
+proc sql;
+	create table data as
+		select sexe, agef, sum(count*exposition)/sum(exposition) as wm
+			from mabib.merged
+				group by agef, sexe;
+run;
+
+proc sgplot data=data;
+	title "Claim Frequency vs Driver's age";
+	scatter x=agef y=wm /  filledoutlinedmarkers 
+		markerfillattrs=(color='darkred') 
+		markeroutlineattrs=(color='black' thickness=2)
+		markerattrs=(symbol=circlefilled size=15);
+	xaxis grid label="age";
+	yaxis grid label="wm";
+	series x=agef y=wm / lineattrs=(color='DARKBLUE');
+run;
+
+/*mean frequency vs Driver's age per sexe */
+proc sgplot data=data;
+	scatter x=agef y=wm /  group= sexe filledoutlinedmarkers 
+		markeroutlineattrs=(color='black' thickness=2)
+		markerattrs=(symbol=circlefilled size=15);;
+	xaxis grid label="age";
+	yaxis grid label="wm";
+	series x=agef y=wm /  lineattrs=(thickness=2 )group=sexe;
+run;
+
+/* ageveh*/
+proc freq data=mabib.Merged noprint;
+	tables age_du_vehicule / out=freqOut;
+run;
+
+title "Distribution of Vehicule's Age";
+
+proc sgplot data=freqOut;
+	vbarparm category=age_du_vehicule response=percent / fillattrs=(color="darkred");
+	xaxis grid;
+	yaxis grid;
+run;
+
+/* Left skewed*/
+data mabib.merged;
+	set mabib.merged;
+
+	if age_du_vehicule >=1 and age_du_vehicule <= 9 then
+		fageveh ="[1,9]";
+
+	if age_du_vehicule >=10 and age_du_vehicule <= 26 then
+		fageveh ="[10,26]";
+
+	if age_du_vehicule >=27 then
+		fageveh ="[27,88]";
+run;
+
+/* Puissance fisc*/
+proc freq data=mabib.Merged noprint;
+	tables puissance_fiscale / out=freqOut;
+run;
+
+title 'Distribution of Puissance fiscale';
+
+proc sgplot data=freqOut;
+	vbarparm category=puissance_fiscale response=percent / fillattrs=(color="darkred");
+	xaxis grid;
+	yaxis grid;
+run;
+
+data mabib.merged;
+	set mabib.merged;
+
+	if puissance_fiscale >= 4 and puissance_fiscale <= 8 then
+		fpuisfisc = "[4,8]";
+
+	if puissance_fiscale >= 9 then
+		fpuisfisc = "[9,36]";
+run;
+
+data mabib.merged;
+	set mabib.merged;
+	offset = log(exposition);
+run;
+
+proc genmod data=mabib.merged;
+	class combustion sexe agef fageveh(ref='[1,9]') fpuisfisc;
+	model count =  combustion sexe agef fageveh fpuisfisc / 
+		dist=poisson link=log offset=offset;
+	ods output modelfit=fit;
+run;
+
+data fit;
+	set fit;
+	pval = 1-cdf("Chisq", value, df);
+run;
+
+/* NegBin model */
+proc genmod data=mabib.merged;
+	class combustion sexe agef fageveh(ref='[1,9]') fpuisfisc;
+	model count=  combustion sexe agef fageveh fpuisfisc/ 
+		dist=negbin link=log offset=offset;
+	ods output modelfit=fit;
+
+data fit;
+	set fit;
+	pval = 1-cdf("Chisq", value, df);
+run;
+
+/* ZINB*/
+proc genmod data=mabib.merged;
+	class combustion sexe agef fageveh(ref='[1,9]') fpuisfisc;
+	model count = combustion sexe agef fageveh fpuisfisc / dist=zinb link=log offset=offset;
+	zeromodel /link=logit;
+	ods output modelfit=fit;
+
+data fit;
+	set fit;
+	pval = 1-cdf("Chisq", value, df);
+run;
+
+/*Vuong test : */
+%include 'C:\Users\Perfect PC\Desktop\Projet Assurance non-vie\Vuong.sas';
+
+proc genmod data=mabib.merged;
+	class combustion sexe agef fageveh(ref='[1,9]') fpuisfisc;
+	model count = combustion sexe agef fageveh fpuisfisc / dist=zip link=log offset=offset;
+	zeromodel /link=logit;
+	output out=outzip pred=predz pzero=p0;
+
+proc genmod data=mabib.merged;
+	class combustion sexe agef fageveh(ref='[1,9]') fpuisfisc;
+	model count =  combustion sexe agef fageveh fpuisfisc / 
+		dist=poisson link=log offset=offset;
+	output out=out pred=predpoi;
+run;
+
+proc sql;
+	create table infos as 
+		select out.count, predz, p0, predpoi
+			from out left join outzip 
+				on out.police=outzip.police;
+quit;
+
+%vuong(data=infos, response=count,
+	model1=zip, p1=predz, dist1=zip, scale1=1.00, pzero1=p0, 
+	model2=poi, p2=predpoi, dist2=poi, scale2=1.00,
+	nparm1=6,   nparm2=5)
+
+
+
+	/* Severity */
+data mabib.newprod;
+	rename numero_police=police;
+	set mabib.newprod;
+run;
+
+/* Severity */
+proc sql;
+	create table mabib.tabfinal as select *, count(newsin.police) as nsin, 
+		sum(newsin.charge)  as montant_total from mabib.newsin left join 
+		mabib.newprod on newsin.police=newprod.police group by 
+		newsin.police, newsin.exercice;
+quit;
+
+data mabib.tabfinal;
+	set mabib.tabfinal;
+
+	if cmiss(of _all_) then
+		delete;
+
+	if nsin > 0 then
+		CM = montant_total / nsin;
+	else delete;
+	keep police exposition sexe age_du_conducteur age_du_vehicule anciennete_de_la_police anciennete_du_permis Combustion 
+		crm puissance_fiscale exercice montant_total nsin CM;
+run;
+
+proc sort data=mabib.tabfinal;
+	by exercice;
+
+data mabib.tabfinal;
+	set mabib.tabfinal;
+
+	if age_du_conducteur >= 19 and age_du_conducteur <= 25 then
+		agef = "[19,25]";
+
+	if age_du_conducteur >= 26 and age_du_conducteur <= 32 then
+		agef = "[26,32]";
+
+	if age_du_conducteur >= 33 and age_du_conducteur <= 39 then
+		agef = "[33,39]";
+
+	if age_du_conducteur >= 40 and age_du_conducteur <= 46 then
+		agef = "[40,46]";
+
+	if age_du_conducteur >= 47 and age_du_conducteur <= 53 then
+		agef = "[47,53]";
+
+	if age_du_conducteur >= 54 and age_du_conducteur <= 60 then
+		agef = "[54,60]";
+
+	if age_du_conducteur >= 61 then
+		agef="[61,96]";
+
+	if age_du_vehicule >=1 and age_du_vehicule <= 9 then
+		fageveh ="[1,9]";
+
+	if age_du_vehicule >=10 and age_du_vehicule <= 26 then
+		fageveh ="[10,26]";
+
+	if age_du_vehicule >=27 then
+		fageveh ="[27,88]";
+
+	if puissance_fiscale >= 4 and puissance_fiscale <= 8 then
+		fpuisfisc = "[4,8]";
+
+	if puissance_fiscale >= 9 then
+		fpuisfisc = "[9,36]";
+run;
+
+/* Gamma*/
+proc genmod data=mabib.tabfinal;
+	class combustion sexe agef(ref='[19,25]') fageveh(ref='[1,9]') fpuisfisc;
+	model CM =  combustion sexe agef fageveh fpuisfisc / 
+		dist=gamma link=log;
+	ods output modelfit=fit;
+run;
+
+data fit;
+	set fit;
+	pval = 1-cdf("Chisq", value, df);
+run;
+
+/* Log-Normal */
+data mabib.tabfinal;
+	set mabib.tabfinal;
+	lCM = log(CM);
+run;
+
+proc genmod data=mabib.tabfinal;
+	class  sexe agef(ref='[19,25]') fageveh(ref='[1,9]') fpuisfisc;
+	model lCM =   sexe agef fageveh fpuisfisc / 
+		dist=normal link=id;
+	ods output modelfit=fit;
+run;
+
+data fit;
+	set fit;
+	pval = 1-cdf("Chisq", value, df);
+run;
+
+/* Pure Premuims*/
+proc genmod data=mabib.merged;
+	class combustion sexe agef fageveh(ref='[1,9]') fpuisfisc;
+	model count =  combustion sexe agef fageveh fpuisfisc / 
+		dist=poisson link=log offset=offset;
+	output out=outp(keep=police predpoi) pred=predpoi;
+run;
+
+proc univariate data=mabib.tabfinal;
+	var CM;
+
+	*Adjusting the log-normal preds;
+	/* Number are too big to be handled, we will scale CM by 10000 and reestimate the model*/
+data mabib.tabfinal;
+	set mabib.tabfinal;
+	scaledlCM = log(CM/10000);
+run;
+
+proc genmod data=mabib.tabfinal;
+	class  sexe agef(ref='[19,25]') fageveh(ref='[1,9]') fpuisfisc;
+	model scaledlCM =   sexe agef fageveh fpuisfisc / 
+		dist=normal link=id;
+	output out=outln(keep=police predln) pred=predln;
+run;
+
+%let correction_factor = exp(1762901297/(2*(10000)**2));
+
+data outln;
+	predlognorm = exp(predln) * &correction_factor;
+	set outln;
+run;
+
+proc sql;
+	create table preds as 
+		select outln.predlognorm, predpoi
+			from outln left join outp 
+				on outln.police=outp.police;
+quit;
+
+* Pure premuims;
+data preds;
+	set preds;
+	Pure_premuims = predpoi * predlognorm;
+
+	if cmiss(of _all_) then
+		delete;
+run;
+
+proc means data=preds;
+	var pure_premuims;
